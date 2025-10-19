@@ -298,3 +298,8 @@ class MinIOStorageAdapter(BaseStorageAdapter):
         """Get public URL for MinIO object."""
         endpoint = self.config['endpoint_url']
         if '://' not in endpoint:
+            protocol = 'https' if self.config.get('secure', True) else 'http'
+            endpoint = f"{protocol}://{endpoint}"
+        
+        bucket_name = self.config['bucket_name']
+        return f"{endpoint}/{bucket_name}/{key}"
