@@ -1,0 +1,20 @@
+# Core dependencies - none required by default
+# Install cloud provider dependencies as needed:
+#   pip install perceptra-storage[s3]
+#   pip install perceptra-storage[azure]
+#   pip install perceptra-storage[minio]
+#   pip install perceptra-storage[all]
+
+# Optional dependencies for specific backends
+# boto3>=1.26.0  # For S3
+# azure-storage-blob>=12.0.0  # For Azure
+# minio>=7.1.0  # For MinIO
+
+# Development dependencies
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# pytest-mock>=3.10.0
+# black>=23.0.0
+# isort>=5.12.0
+# flake8>=6.0.0
+# mypy>=1.0.0
