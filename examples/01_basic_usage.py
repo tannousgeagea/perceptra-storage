@@ -267,9 +267,9 @@ def main():
     example_error_handling()
     
     # Cloud examples (will fail without credentials)
-    example_s3_storage()
-    example_azure_storage()
-    example_minio_storage()
+    # example_s3_storage()
+    # example_azure_storage()
+    # example_minio_storage()
     
     print("\n" + "=" * 60)
     print("Examples completed!")
