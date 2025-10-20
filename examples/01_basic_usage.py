@@ -107,16 +107,18 @@ def example_s3_storage():
 
 
 def example_azure_storage():
+    import os
+    
     """Example: Azure Blob Storage."""
     print("\n=== AZURE BLOB STORAGE EXAMPLE ===")
     
     config = {
-        'container_name': 'ml-models',
-        'account_name': 'myazureaccount'
+        'container_name': os.getenv("AZURE_CONTAINER_NAME"),
+        'account_name': os.getenv("AZURE_ACCOUNT_NAME")
     }
     
     credentials = {
-        'account_key': 'YOUR_AZURE_ACCOUNT_KEY'
+        'account_key': os.getenv("AZURE_ACCOUNT_KEY")
         # Or use connection string:
         # 'connection_string': 'DefaultEndpointsProtocol=https;AccountName=...'
     }
@@ -135,6 +137,14 @@ def example_azure_storage():
             content_type='application/octet-stream'
         )
         print("✓ Uploaded model to Azure")
+        
+        # List files
+        files = adapter.list_files()
+        print(f"✓ Total files: {len(files)}")
+        
+        # Delete the file
+        adapter.delete_file('models/yolov8/weights.pt')
+        print("✓ File deleted")
         
     except Exception as e:
         print(f"✗ Azure Example failed: {e}")
@@ -264,11 +274,11 @@ def main():
     # Run examples
     example_local_storage()
     example_file_operations()
-    example_error_handling()
+    # example_error_handling()
     
     # Cloud examples (will fail without credentials)
     # example_s3_storage()
-    # example_azure_storage()
+    example_azure_storage()
     # example_minio_storage()
     
     print("\n" + "=" * 60)
