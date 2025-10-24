@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "perceptra-storage"
-version = "0.1.0"
+version = "0.1.1"
 description = "Unified storage adapter interface for multi-cloud storage backends"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "Perceptra Team", email = "dev@perceptra.ai"}
+    {name = "Tannous Geagea", email = "tannousgeagea@hotmail.com"}
 ]
 maintainers = [
-    {name = "Perceptra Team", email = "dev@perceptra.ai"}
+    {name = "Tannous Geagea", email = "tannousgeagea@hotmail.com"}
 ]
 keywords = [
     "storage",

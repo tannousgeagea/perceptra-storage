@@ -287,10 +287,21 @@ class AzureStorageAdapter(BaseStorageAdapter):
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
             # Check if we have account key for SAS generation
-            if not self.credentials or 'account_key' not in self.credentials:
+            account_key = None
+            
+            if self.credentials and 'account_key' in self.credentials:
+                account_key = self.credentials['account_key']
+            elif self.credentials and 'connection_string' in self.credentials:
+                # Parse connection string to extract account key
+                conn_str = self.credentials['connection_string']
+                conn_parts = dict(part.split('=', 1) for part in conn_str.split(';') if '=' in part)
+                account_key = conn_parts.get('AccountKey')
+            
+            if not account_key:
                 raise StorageOperationError(
-                    "Account key required for SAS URL generation"
+                    "Account key or connection string with AccountKey required for SAS URL generation"
                 )
+            
             
             start_time = datetime.now(timezone.utc)
             expiry_time = start_time + timedelta(seconds=expiration)
