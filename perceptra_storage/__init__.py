@@ -25,7 +25,7 @@ Usage:
     >>> data = adapter.download_file('datasets/data.csv')
 """
 
-__version__ = '0.1.1'
+__version__ = '0.1.2'
 __author__ = 'Perceptra Team'
 __license__ = 'MIT'
 

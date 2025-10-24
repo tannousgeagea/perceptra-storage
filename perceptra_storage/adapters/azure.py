@@ -310,7 +310,7 @@ class AzureStorageAdapter(BaseStorageAdapter):
                 account_name=self.config['account_name'],
                 container_name=self.config['container_name'],
                 blob_name=key,
-                account_key=self.credentials['account_key'],
+                account_key=account_key,
                 permission=permissions,
                 expiry=expiry_time,
                 start=start_time
