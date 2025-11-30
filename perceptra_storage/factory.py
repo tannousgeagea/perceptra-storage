@@ -9,6 +9,7 @@ from .adapters.s3 import S3StorageAdapter
 from .adapters.azure import AzureStorageAdapter
 from .adapters.minio import MinIOStorageAdapter
 from .adapters.local import LocalStorageAdapter
+from .adapters.remote import RemoteStorageAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ ADAPTER_REGISTRY = {
     'azure': AzureStorageAdapter,
     'minio': MinIOStorageAdapter,
     'local': LocalStorageAdapter,
+    'remote': RemoteStorageAdapter,
 }
 
 
