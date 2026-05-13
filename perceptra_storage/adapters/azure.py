@@ -285,10 +285,22 @@ class AzureStorageAdapter(BaseStorageAdapter):
             permissions = permission_map.get(method.upper())
             if not permissions:
                 raise ValueError(f"Unsupported HTTP method: {method}")
-            
+
+            start_time = datetime.now(timezone.utc)
+            expiry_time = start_time + timedelta(seconds=expiration)
+
+            if self.credentials and self.credentials.get("sas_token"):
+                sas_token = self.credentials["sas_token"].lstrip("?")
+
+                return PresignedUrl(
+                    url=f"{base_blob_url}?{sas_token}",
+                    expires_at=expiry_time,
+                    method=method,
+                )
+
             # Check if we have account key for SAS generation
             account_key = None
-            
+
             if self.credentials and 'account_key' in self.credentials:
                 account_key = self.credentials['account_key']
             elif self.credentials and 'connection_string' in self.credentials:
@@ -301,10 +313,6 @@ class AzureStorageAdapter(BaseStorageAdapter):
                 raise StorageOperationError(
                     "Account key or connection string with AccountKey required for SAS URL generation"
                 )
-            
-            
-            start_time = datetime.now(timezone.utc)
-            expiry_time = start_time + timedelta(seconds=expiration)
             
             sas_token = generate_blob_sas(
                 account_name=self.config['account_name'],
