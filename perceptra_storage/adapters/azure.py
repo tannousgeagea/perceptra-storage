@@ -3,6 +3,7 @@ Azure Blob Storage adapter implementation.
 """
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 from typing import Optional, BinaryIO, Dict, Any
 import logging
 
@@ -288,6 +289,17 @@ class AzureStorageAdapter(BaseStorageAdapter):
 
             start_time = datetime.now(timezone.utc)
             expiry_time = start_time + timedelta(seconds=expiration)
+
+            account_name = self.config["account_name"]
+            container_name = self.config["container_name"]
+
+            # Encode blob key safely while preserving path separators
+            encoded_key = quote(key.lstrip("/"), safe="/")
+
+            base_blob_url = (
+                f"https://{account_name}.blob.core.windows.net/"
+                f"{container_name}/{encoded_key}"
+            )
 
             if self.credentials and self.credentials.get("sas_token"):
                 sas_token = self.credentials["sas_token"].lstrip("?")
