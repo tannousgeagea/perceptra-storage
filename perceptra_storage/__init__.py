@@ -25,7 +25,7 @@ Usage:
     >>> data = adapter.download_file('datasets/data.csv')
 """
 
-__version__ = '0.1.4'
+__version__ = '0.2.0'
 __author__ = 'Perceptra Team'
 __license__ = 'MIT'
 
@@ -47,7 +47,9 @@ from .factory import (
     list_available_backends,
     get_adapter_info,
     StorageAdapterError,
+    GCSStorageAdapter,
 )
+from .readonly import ReadOnlyStorageAdapter
 
 # Import adapters for direct access
 from .adapters.s3 import S3StorageAdapter
@@ -83,4 +85,6 @@ __all__ = [
     'AzureStorageAdapter',
     'MinIOStorageAdapter',
     'LocalStorageAdapter',
+    'GCSStorageAdapter',
+    'ReadOnlyStorageAdapter',
 ]

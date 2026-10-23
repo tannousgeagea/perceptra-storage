@@ -232,6 +232,22 @@ class BaseStorageAdapter(ABC):
         """
         pass
 
+    @property
+    def can_presign(self) -> bool:
+        """
+        Whether generate_presigned_url can mint a fresh, short-lived URL.
+
+        False when the adapter only holds a long-lived token (e.g. an Azure
+        SAS) that it would have to hand out as-is: callers should then serve
+        the bytes through their own authenticated proxy instead.
+        """
+        return True
+
+    @property
+    def read_only(self) -> bool:
+        """Whether writes and deletes are refused (see ReadOnlyStorageAdapter)."""
+        return False
+
     def get_public_url(self, key: str) -> Optional[str]:
         """
         Get public URL for a file (if supported by backend).

@@ -80,8 +80,15 @@ class MinIOStorageAdapter(BaseStorageAdapter):
             }
             
             if self.credentials:
-                client_kwargs['access_key'] = self.credentials.get('access_key', '')
-                client_kwargs['secret_key'] = self.credentials.get('secret_key', '')
+                # The S3-style names are accepted too: every other adapter uses them.
+                client_kwargs['access_key'] = (
+                    self.credentials.get('access_key') or self.credentials.get('access_key_id', '')
+                )
+                client_kwargs['secret_key'] = (
+                    self.credentials.get('secret_key') or self.credentials.get('secret_access_key', '')
+                )
+                if self.credentials.get('session_token'):
+                    client_kwargs['session_token'] = self.credentials['session_token']
             
             if region:
                 client_kwargs['region'] = region

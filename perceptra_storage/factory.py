@@ -21,6 +21,13 @@ ADAPTER_REGISTRY = {
     'local': LocalStorageAdapter,
 }
 
+# GCS is optional: registered only when google-cloud-storage is installed.
+try:
+    from .adapters.gcs import GCSStorageAdapter
+    ADAPTER_REGISTRY['gcs'] = GCSStorageAdapter
+except ImportError:  # pragma: no cover - depends on the installed extras
+    GCSStorageAdapter = None
+
 
 class StorageAdapterError(Exception):
     """Raised when adapter creation fails."""
@@ -30,15 +37,18 @@ class StorageAdapterError(Exception):
 def get_storage_adapter(
     backend: str,
     config: Dict[str, Any],
-    credentials: Optional[Dict[str, Any]] = None
+    credentials: Optional[Dict[str, Any]] = None,
+    read_only: bool = False,
 ) -> BaseStorageAdapter:
     """
     Factory function to create storage adapter instances.
-    
+
     Args:
-        backend: Backend type ('s3', 'azure', 'minio', 'local')
+        backend: Backend type ('s3', 'azure', 'minio', 'gcs', 'local')
         config: Backend-specific configuration dictionary
         credentials: Optional credentials dictionary
+        read_only: Wrap the adapter so uploads and deletes are refused
+            (external storage that is only referenced, never owned)
     
     Returns:
         Initialized storage adapter instance
@@ -65,8 +75,11 @@ def get_storage_adapter(
     adapter_class = ADAPTER_REGISTRY[backend]
     
     try:
-        logger.info(f"Creating {backend} storage adapter")
+        logger.info(f"Creating {backend} storage adapter{' (read-only)' if read_only else ''}")
         adapter = adapter_class(config=config, credentials=credentials)
+        if read_only:
+            from .readonly import ReadOnlyStorageAdapter
+            adapter = ReadOnlyStorageAdapter(adapter)
         return adapter
         
     except Exception as e:
