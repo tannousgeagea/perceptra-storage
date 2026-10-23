@@ -35,8 +35,10 @@ class S3StorageAdapter(BaseStorageAdapter):
     Configuration required:
         - bucket_name: S3 bucket name
         - region: AWS region (optional, defaults to us-east-1)
-    
-    Credentials required:
+        - endpoint_url: S3-compatible endpoint (optional: Wasabi, Ceph, R2, ...)
+
+    Credentials (optional — without them boto3's default chain is used,
+    e.g. an instance or workload IAM role):
         - access_key_id: AWS access key ID
         - secret_access_key: AWS secret access key
         - session_token: AWS session token (optional, for temporary credentials)
@@ -75,9 +77,12 @@ class S3StorageAdapter(BaseStorageAdapter):
                 session_kwargs['aws_access_key_id'] = self.credentials.get('access_key_id')
                 session_kwargs['aws_secret_access_key'] = self.credentials.get('secret_access_key')
                 
-                if 'session_token' in self.credentials:
+                if self.credentials.get('session_token'):
                     session_kwargs['aws_session_token'] = self.credentials['session_token']
-            
+
+            if self.config.get('endpoint_url'):
+                session_kwargs['endpoint_url'] = self.config['endpoint_url']
+
             self._client = boto3.client('s3', config=boto_config, **session_kwargs)
             
         except Exception as e:
@@ -298,7 +303,10 @@ class S3StorageAdapter(BaseStorageAdapter):
         """Get public URL for S3 object (if bucket is public)."""
         bucket_name = self.config['bucket_name']
         region = self.config.get('region', 'us-east-1')
-        
+
+        if self.config.get('endpoint_url'):
+            return f"{self.config['endpoint_url'].rstrip('/')}/{bucket_name}/{key}"
+
         # Standard S3 URL format
         if region == 'us-east-1':
             return f"https://{bucket_name}.s3.amazonaws.com/{key}"

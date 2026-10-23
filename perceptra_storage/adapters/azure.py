@@ -47,21 +47,57 @@ class AzureStorageAdapter(BaseStorageAdapter):
     Configuration required:
         - container_name: Azure container name
         - account_name: Azure storage account name
-    
+    Optional:
+        - account_url: full blob endpoint (private endpoints, Azurite)
+        - endpoint_suffix: e.g. core.chinacloudapi.cn (default core.windows.net)
+
     Credentials required:
         - account_key: Azure storage account key
         OR
-        - sas_token: Shared Access Signature token
-        OR
         - connection_string: Full connection string
+        OR
+        - tenant_id + client_id + client_secret: Entra ID service principal
+          (needs "Storage Blob Data Reader" and, for presigned URLs,
+          "Storage Blob Delegator": URLs are short-lived user-delegation SAS)
+        OR
+        - sas_token: Shared Access Signature token. It cannot mint short-lived
+          URLs (can_presign is False): serve such blobs through a proxy.
     """
+
+    # A user delegation key is valid for at most 7 days; refresh it well before.
+    DELEGATION_KEY_TTL = timedelta(hours=12)
 
     def __init__(self, config: Dict[str, Any], credentials: Optional[Dict[str, Any]] = None):
         """Initialize Azure storage adapter."""
         super().__init__(config, credentials)
         self._blob_service_client = None
         self._container_client = None
+        self._delegation_key = None
+        self._delegation_key_expiry = None
         self._initialize_client()
+
+    @property
+    def account_url(self) -> str:
+        """The blob service endpoint, without a query string."""
+        if self.config.get('account_url'):
+            return self.config['account_url'].rstrip('/')
+        suffix = self.config.get('endpoint_suffix') or 'core.windows.net'
+        return f"https://{self.config['account_name']}.blob.{suffix}"
+
+    @property
+    def uses_service_principal(self) -> bool:
+        return bool(self.credentials) and all(
+            self.credentials.get(k) for k in ('tenant_id', 'client_id', 'client_secret')
+        )
+
+    @property
+    def can_presign(self) -> bool:
+        """Only a key or a service principal can mint short-lived SAS URLs."""
+        if not self.credentials:
+            return False
+        if self.uses_service_principal or self.credentials.get('account_key'):
+            return True
+        return 'AccountKey=' in (self.credentials.get('connection_string') or '')
 
     def _validate_config(self) -> None:
         """Validate Azure configuration."""
@@ -77,9 +113,9 @@ class AzureStorageAdapter(BaseStorageAdapter):
     def _initialize_client(self) -> None:
         """Initialize Azure blob service client."""
         try:
-            account_name = self.config['account_name']
             container_name = self.config['container_name']
-            
+            account_url = self.account_url
+
             # Try connection string first
             if self.credentials and 'connection_string' in self.credentials:
                 self._blob_service_client = BlobServiceClient.from_connection_string(
@@ -87,14 +123,29 @@ class AzureStorageAdapter(BaseStorageAdapter):
                 )
             # Try account key
             elif self.credentials and 'account_key' in self.credentials:
-                account_url = f"https://{account_name}.blob.core.windows.net"
                 self._blob_service_client = BlobServiceClient(
                     account_url=account_url,
                     credential=self.credentials['account_key']
                 )
+            # Try an Entra ID service principal
+            elif self.uses_service_principal:
+                try:
+                    from azure.identity import ClientSecretCredential
+                except ImportError:
+                    raise ImportError(
+                        "azure-identity is required for service principal credentials. "
+                        "Install with: pip install perceptra-storage[azure]"
+                    )
+                self._blob_service_client = BlobServiceClient(
+                    account_url=account_url,
+                    credential=ClientSecretCredential(
+                        tenant_id=self.credentials['tenant_id'],
+                        client_id=self.credentials['client_id'],
+                        client_secret=self.credentials['client_secret'],
+                    ),
+                )
             # Try SAS token
             elif self.credentials and 'sas_token' in self.credentials:
-                account_url = f"https://{account_name}.blob.core.windows.net"
                 sas_token = self.credentials['sas_token']
                 if not sas_token.startswith('?'):
                     sas_token = f"?{sas_token}"
@@ -103,7 +154,8 @@ class AzureStorageAdapter(BaseStorageAdapter):
                 )
             else:
                 raise ValueError(
-                    "Azure adapter requires one of: connection_string, account_key, or sas_token"
+                    "Azure adapter requires one of: connection_string, account_key, "
+                    "tenant_id/client_id/client_secret, or sas_token"
                 )
             
             self._container_client = self._blob_service_client.get_container_client(
@@ -128,9 +180,18 @@ class AzureStorageAdapter(BaseStorageAdapter):
             raise StorageConnectionError(
                 f"Azure container '{self.config['container_name']}' does not exist"
             )
-        except ClientAuthenticationError as e:
-            raise StoragePermissionError(f"Azure authentication failed: {e}")
-        except (ServiceRequestError, HttpResponseError) as e:
+        except (ClientAuthenticationError, HttpResponseError) as e:
+            # A narrowly scoped credential (read/list SAS, data-reader role) may
+            # not read container properties: listing one blob proves access.
+            if getattr(e, 'status_code', None) in (401, 403) or isinstance(e, ClientAuthenticationError):
+                try:
+                    next(iter(self._container_client.list_blobs(results_per_page=1, timeout=timeout)), None)
+                    logger.info(f"Connected to Azure container (list access): {self.config['container_name']}")
+                    return True
+                except Exception as list_error:
+                    raise StoragePermissionError(f"Azure authentication failed: {list_error}")
+            raise StorageConnectionError(f"Azure connection failed: {e}")
+        except ServiceRequestError as e:
             raise StorageConnectionError(f"Azure connection failed: {e}")
 
     def upload_file(
@@ -287,27 +348,34 @@ class AzureStorageAdapter(BaseStorageAdapter):
             if not permissions:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            start_time = datetime.now(timezone.utc)
-            expiry_time = start_time + timedelta(seconds=expiration)
+            # Allow for clock skew between us and Azure.
+            start_time = datetime.now(timezone.utc) - timedelta(minutes=5)
+            expiry_time = datetime.now(timezone.utc) + timedelta(seconds=expiration)
 
-            account_name = self.config["account_name"]
             container_name = self.config["container_name"]
 
             # Encode blob key safely while preserving path separators
             encoded_key = quote(key.lstrip("/"), safe="/")
+            base_blob_url = f"{self.account_url}/{container_name}/{encoded_key}"
 
-            base_blob_url = (
-                f"https://{account_name}.blob.core.windows.net/"
-                f"{container_name}/{encoded_key}"
-            )
+            if self.uses_service_principal:
+                sas_token = generate_blob_sas(
+                    account_name=self.config['account_name'],
+                    container_name=container_name,
+                    blob_name=key.lstrip("/"),
+                    user_delegation_key=self._get_delegation_key(expiry_time),
+                    permission=permissions,
+                    expiry=expiry_time,
+                    start=start_time,
+                )
+                return PresignedUrl(url=f"{base_blob_url}?{sas_token}", expires_at=expiry_time,
+                                    method=method.upper())
 
-            if self.credentials and self.credentials.get("sas_token"):
-                sas_token = self.credentials["sas_token"].lstrip("?")
-
-                return PresignedUrl(
-                    url=f"{base_blob_url}?{sas_token}",
-                    expires_at=expiry_time,
-                    method=method,
+            if not self.can_presign:
+                # Never hand out the stored long-lived SAS as if it were a short-lived URL.
+                raise StorageOperationError(
+                    "This Azure credential cannot mint short-lived URLs (SAS token only): "
+                    "use an account key or a service principal, or serve the blob through a proxy"
                 )
 
             # Check if we have account key for SAS generation
@@ -328,31 +396,41 @@ class AzureStorageAdapter(BaseStorageAdapter):
             
             sas_token = generate_blob_sas(
                 account_name=self.config['account_name'],
-                container_name=self.config['container_name'],
-                blob_name=key,
+                container_name=container_name,
+                blob_name=key.lstrip("/"),
                 account_key=account_key,
                 permission=permissions,
                 expiry=expiry_time,
                 start=start_time
             )
-            
-            blob_url = (
-                f"https://{self.config['account_name']}.blob.core.windows.net/"
-                f"{self.config['container_name']}/{key}?{sas_token}"
-            )
-            
+
             return PresignedUrl(
-                url=blob_url,
+                url=f"{base_blob_url}?{sas_token}",
                 expires_at=expiry_time,
                 method=method.upper()
             )
-            
+
+        except StorageOperationError:
+            raise
         except Exception as e:
             raise StorageOperationError(f"Azure SAS URL generation failed: {e}")
 
+    def _get_delegation_key(self, needed_until: datetime):
+        """A user delegation key valid past `needed_until` (cached, refreshed early)."""
+        now = datetime.now(timezone.utc)
+        if (
+            self._delegation_key is None
+            or self._delegation_key_expiry is None
+            or self._delegation_key_expiry < needed_until + timedelta(minutes=5)
+        ):
+            expiry = max(now + self.DELEGATION_KEY_TTL, needed_until + timedelta(minutes=10))
+            self._delegation_key = self._blob_service_client.get_user_delegation_key(
+                key_start_time=now - timedelta(minutes=5),
+                key_expiry_time=expiry,
+            )
+            self._delegation_key_expiry = expiry
+        return self._delegation_key
+
     def get_public_url(self, key: str) -> Optional[str]:
         """Get public URL for Azure blob (if container is public)."""
-        return (
-            f"https://{self.config['account_name']}.blob.core.windows.net/"
-            f"{self.config['container_name']}/{key}"
-        )
+        return f"{self.account_url}/{self.config['container_name']}/{quote(key.lstrip('/'), safe='/')}"

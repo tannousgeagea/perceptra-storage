@@ -20,7 +20,7 @@ if requirements_file.exists():
 
 setup(
     name='perceptra-storage',
-    version='0.1.4',
+    version='0.2.0',
     author='Perceptra Team',
     author_email='dev@perceptra.ai',
     description='Unified storage adapter interface for multi-cloud storage backends',
@@ -46,12 +46,15 @@ setup(
     ],
     extras_require={
         's3': ['boto3>=1.26.0'],
-        'azure': ['azure-storage-blob>=12.0.0'],
+        'azure': ['azure-storage-blob>=12.0.0', 'azure-identity>=1.15.0'],
         'minio': ['minio>=7.1.0'],
+        'gcs': ['google-cloud-storage>=2.10.0'],
         'all': [
             'boto3>=1.26.0',
             'azure-storage-blob>=12.0.0',
+            'azure-identity>=1.15.0',
             'minio>=7.1.0',
+            'google-cloud-storage>=2.10.0',
         ],
         'dev': [
             'pytest>=7.0.0',
