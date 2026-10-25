@@ -181,16 +181,42 @@ class AzureStorageAdapter(BaseStorageAdapter):
                 f"Azure container '{self.config['container_name']}' does not exist"
             )
         except (ClientAuthenticationError, HttpResponseError) as e:
-            # A narrowly scoped credential (read/list SAS, data-reader role) may
-            # not read container properties: listing one blob proves access.
+            # A narrowly scoped credential (container SAS sp=r / sp=rl, a
+            # data-reader role) may not read container properties.
             if getattr(e, 'status_code', None) in (401, 403) or isinstance(e, ClientAuthenticationError):
-                try:
-                    next(iter(self._container_client.list_blobs(results_per_page=1, timeout=timeout)), None)
-                    logger.info(f"Connected to Azure container (list access): {self.config['container_name']}")
-                    return True
-                except Exception as list_error:
-                    raise StoragePermissionError(f"Azure authentication failed: {list_error}")
+                return self._test_narrow_access(timeout)
             raise StorageConnectionError(f"Azure connection failed: {e}")
+        except ServiceRequestError as e:
+            raise StorageConnectionError(f"Azure connection failed: {e}")
+
+    # Name that cannot exist: probing it needs only read permission on blobs.
+    PROBE_BLOB = "__perceptra_connection_probe__/does-not-exist"
+
+    def _test_narrow_access(self, timeout: int) -> bool:
+        """Prove access with the least permission available: listing one blob
+        (sp=l), else reading a blob that cannot exist (sp=r) — a 404
+        BlobNotFound means the request was authorized; 403 means it was not."""
+        container = self.config['container_name']
+        try:
+            next(iter(self._container_client.list_blobs(results_per_page=1, timeout=timeout)), None)
+            logger.info(f"Connected to Azure container (list access): {container}")
+            return True
+        except Exception:
+            pass  # no list permission (e.g. sp=r): try a read
+
+        try:
+            self._container_client.get_blob_client(self.PROBE_BLOB).get_blob_properties(timeout=timeout)
+            return True  # the probe blob exists after all: readable
+        except ResourceNotFoundError as e:
+            if getattr(e, 'error_code', None) == 'ContainerNotFound':
+                raise StorageConnectionError(f"Azure container '{container}' does not exist")
+            logger.info(f"Connected to Azure container (read access): {container}")
+            return True
+        except (ClientAuthenticationError, HttpResponseError) as e:
+            raise StoragePermissionError(
+                f"Azure authentication failed: the credential cannot read blobs of container '{container}' "
+                f"(a SAS needs at least sp=r, scoped to this container, and must not be expired): {e}"
+            )
         except ServiceRequestError as e:
             raise StorageConnectionError(f"Azure connection failed: {e}")
 

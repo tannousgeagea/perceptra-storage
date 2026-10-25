@@ -20,7 +20,7 @@ if requirements_file.exists():
 
 setup(
     name='perceptra-storage',
-    version='0.2.0',
+    version='0.2.1',
     author='Perceptra Team',
     author_email='dev@perceptra.ai',
     description='Unified storage adapter interface for multi-cloud storage backends',

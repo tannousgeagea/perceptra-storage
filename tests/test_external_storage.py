@@ -144,6 +144,49 @@ class TestAzure:
         adapter._container_client = container
         assert adapter.test_connection() is True
 
+    @staticmethod
+    def _denied(code="AuthorizationPermissionMismatch"):
+        from azure.core.exceptions import HttpResponseError
+
+        error = HttpResponseError(message="This request is not authorized to perform this operation using this permission.")
+        error.status_code, error.error_code = 403, code
+        return error
+
+    def _read_only_container(self, probe_error):
+        container = MagicMock()
+        container.get_container_properties.side_effect = self._denied()
+        container.list_blobs.side_effect = self._denied()  # sp=r: no list permission
+        container.get_blob_client.return_value.get_blob_properties.side_effect = probe_error
+        return container
+
+    def test_read_only_sas_without_list_passes(self):
+        """sp=r container SAS (no list): reading a missing blob is a 404 — authorized."""
+        pytest.importorskip("azure.storage.blob")
+        from azure.core.exceptions import ResourceNotFoundError
+
+        adapter = get_storage_adapter("azure", self.CONFIG, {"sas_token": "se=2027-04-19&sp=r&sv=2026-04-06&sr=c&sig=x"},
+                                      read_only=True)
+        not_found = ResourceNotFoundError(message="The specified blob does not exist.")
+        not_found.error_code = "BlobNotFound"
+        adapter.inner._container_client = self._read_only_container(not_found)
+        assert adapter.test_connection() is True
+
+    def test_read_only_probe_reports_missing_container_and_denied_reads(self):
+        pytest.importorskip("azure.storage.blob")
+        from azure.core.exceptions import ResourceNotFoundError
+        from perceptra_storage import StorageConnectionError
+
+        adapter = get_storage_adapter("azure", self.CONFIG, {"sas_token": "sv=1&sp=r&sig=x"})
+        missing = ResourceNotFoundError(message="The specified container does not exist.")
+        missing.error_code = "ContainerNotFound"
+        adapter._container_client = self._read_only_container(missing)
+        with pytest.raises(StorageConnectionError):
+            adapter.test_connection()
+
+        adapter._container_client = self._read_only_container(self._denied("AuthenticationFailed"))
+        with pytest.raises(StoragePermissionError, match="at least sp=r"):
+            adapter.test_connection()
+
 
 @pytest.mark.gcs
 class TestGCS:
