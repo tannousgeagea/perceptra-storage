@@ -4,9 +4,9 @@ Base storage adapter interface for perceptra-storage package.
 This module defines the abstract base class that all storage adapters must implement.
 """
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional, BinaryIO, Dict, Any
+from typing import Optional, BinaryIO, Dict, Any, List
 from pathlib import Path
 
 
@@ -52,6 +52,19 @@ class PresignedUrl:
     url: str
     expires_at: datetime
     method: str = "GET"
+
+
+@dataclass
+class StoragePage:
+    """One page of a folder-style listing (list_page).
+
+    objects     files directly under the prefix
+    prefixes    "sub-folders" (keys up to the next delimiter, ending with it)
+    next_token  opaque continuation token, None on the last page
+    """
+    objects: List[StorageObject] = field(default_factory=list)
+    prefixes: List[str] = field(default_factory=list)
+    next_token: Optional[str] = None
 
 
 class BaseStorageAdapter(ABC):
@@ -247,6 +260,42 @@ class BaseStorageAdapter(ABC):
     def read_only(self) -> bool:
         """Whether writes and deletes are refused (see ReadOnlyStorageAdapter)."""
         return False
+
+    def download_range(self, key: str, offset: int = 0, length: int = 65536) -> bytes:
+        """
+        Read `length` bytes of a file starting at `offset` (e.g. an image
+        header, to learn its size without fetching the whole file).
+
+        Backends override this with a ranged request; this fallback downloads
+        the file and slices it.
+
+        Raises:
+            StorageNotFoundError: If file doesn't exist.
+        """
+        return self.download_file(key)[offset:offset + length]
+
+    def list_page(
+        self,
+        prefix: str = "",
+        delimiter: str = "/",
+        page_size: int = 200,
+        continuation_token: Optional[str] = None,
+    ) -> StoragePage:
+        """
+        One page of a folder-style listing: files directly under `prefix` and
+        its sub-folders (common prefixes up to `delimiter`).
+
+        Backends override this with their native paginated listing; this
+        fallback derives folders from list_files and does not paginate.
+        """
+        prefixes, objects = set(), []
+        for obj in self.list_files(prefix=prefix, max_results=10000):
+            rest = obj.key[len(prefix):]
+            if delimiter and delimiter in rest:
+                prefixes.add(prefix + rest.split(delimiter, 1)[0] + delimiter)
+            else:
+                objects.append(obj)
+        return StoragePage(objects=objects[:page_size], prefixes=sorted(prefixes), next_token=None)
 
     def get_public_url(self, key: str) -> Optional[str]:
         """

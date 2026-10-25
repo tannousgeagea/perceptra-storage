@@ -10,7 +10,7 @@ read is delegated unchanged.
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, Optional
 
-from .base import BaseStorageAdapter, PresignedUrl, StorageObject, StoragePermissionError
+from .base import BaseStorageAdapter, PresignedUrl, StorageObject, StoragePage, StoragePermissionError
 
 WRITE_METHODS = ("PUT", "POST", "DELETE")
 
@@ -65,6 +65,14 @@ class ReadOnlyStorageAdapter(BaseStorageAdapter):
 
     def list_files(self, prefix: str = "", max_results: int = 1000) -> list[StorageObject]:
         return self._inner.list_files(prefix=prefix, max_results=max_results)
+
+    def download_range(self, key: str, offset: int = 0, length: int = 65536) -> bytes:
+        return self._inner.download_range(key, offset=offset, length=length)
+
+    def list_page(self, prefix: str = "", delimiter: str = "/", page_size: int = 200,
+                  continuation_token: Optional[str] = None) -> StoragePage:
+        return self._inner.list_page(prefix=prefix, delimiter=delimiter, page_size=page_size,
+                                     continuation_token=continuation_token)
 
     def generate_presigned_url(self, key: str, expiration: int = 3600, method: str = "GET") -> PresignedUrl:
         if method.upper() in WRITE_METHODS:

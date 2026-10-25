@@ -19,6 +19,7 @@ except ImportError:
 from ..base import (
     BaseStorageAdapter,
     StorageObject,
+    StoragePage,
     PresignedUrl,
     StorageConnectionError,
     StorageOperationError,
@@ -262,6 +263,58 @@ class MinIOStorageAdapter(BaseStorageAdapter):
             return files
             
         except S3Error as e:
+            raise StorageOperationError(f"MinIO list operation failed: {e}")
+
+    def download_range(self, key: str, offset: int = 0, length: int = 65536) -> bytes:
+        """Ranged GET of an object."""
+        response = None
+        try:
+            response = self._client.get_object(self.config['bucket_name'], key, offset=offset, length=length)
+            return response.read()
+        except S3Error as e:
+            if e.code in ('NoSuchKey', 'NoSuchObject'):
+                raise StorageNotFoundError(f"File not found in MinIO: {key}")
+            if e.code == 'InvalidRange':
+                return b""
+            if e.code == 'AccessDenied':
+                raise StoragePermissionError(f"Permission denied reading from MinIO: {key}")
+            raise StorageOperationError(f"MinIO ranged download failed: {e}")
+        finally:
+            if response is not None:
+                response.close()
+                response.release_conn()
+
+    def list_page(
+        self,
+        prefix: str = "",
+        delimiter: str = "/",
+        page_size: int = 200,
+        continuation_token: Optional[str] = None,
+    ) -> StoragePage:
+        """Folder-style listing; the continuation token is the last key returned (start_after)."""
+        page = StoragePage()
+        try:
+            items = self._client.list_objects(
+                self.config['bucket_name'], prefix=prefix or None, recursive=not delimiter,
+                start_after=continuation_token,
+            )
+            last = None
+            for obj in items:
+                if len(page.objects) + len(page.prefixes) >= page_size:
+                    page.next_token = last
+                    break
+                if obj.is_dir:
+                    page.prefixes.append(obj.object_name)
+                else:
+                    page.objects.append(StorageObject(
+                        key=obj.object_name, size=obj.size, last_modified=obj.last_modified,
+                        etag=obj.etag.strip('"') if obj.etag else None,
+                    ))
+                last = obj.object_name
+            return page
+        except S3Error as e:
+            if e.code == 'AccessDenied':
+                raise StoragePermissionError(f"Listing bucket '{self.config['bucket_name']}' is not permitted: {e}")
             raise StorageOperationError(f"MinIO list operation failed: {e}")
 
     def generate_presigned_url(
