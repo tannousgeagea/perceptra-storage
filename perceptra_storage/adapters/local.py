@@ -13,6 +13,7 @@ import mimetypes
 from ..base import (
     BaseStorageAdapter,
     StorageObject,
+    StoragePage,
     PresignedUrl,
     StorageConnectionError,
     StorageOperationError,
@@ -243,6 +244,54 @@ class LocalStorageAdapter(BaseStorageAdapter):
             raise StorageNotFoundError(f"File not found: {key}")
         except Exception as e:
             raise StorageOperationError(f"Local metadata retrieval failed: {e}")
+
+    def download_range(self, key: str, offset: int = 0, length: int = 65536) -> bytes:
+        """Read a slice of a local file."""
+        try:
+            path = self._get_full_path(key)
+        except ValueError as e:
+            raise StorageOperationError(str(e))
+        if not path.is_file():
+            raise StorageNotFoundError(f"File not found: {key}")
+        with open(path, 'rb') as fh:
+            fh.seek(offset)
+            return fh.read(length)
+
+    def list_page(
+        self,
+        prefix: str = "",
+        delimiter: str = "/",
+        page_size: int = 200,
+        continuation_token: Optional[str] = None,
+    ) -> StoragePage:
+        """Folder-style listing of one directory; the token is an offset."""
+        folder, _, name_prefix = prefix.rpartition('/')
+        try:
+            directory = self._get_full_path(folder) if folder else self._base_path
+        except ValueError as e:
+            raise StorageOperationError(str(e))
+        if not directory.is_dir():
+            return StoragePage()
+        entries = sorted(
+            (e for e in os.scandir(directory) if e.name.startswith(name_prefix) and not e.name.endswith('.meta')),
+            key=lambda e: e.name,
+        )
+        start = int(continuation_token or 0)
+        page = StoragePage()
+        base = f"{folder}/" if folder else ""
+        for entry in entries[start:start + page_size]:
+            if entry.is_dir():
+                page.prefixes.append(f"{base}{entry.name}/")
+            else:
+                stat = entry.stat()
+                page.objects.append(StorageObject(
+                    key=f"{base}{entry.name}", size=stat.st_size,
+                    last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                    content_type=mimetypes.guess_type(entry.name)[0],
+                ))
+        if start + page_size < len(entries):
+            page.next_token = str(start + page_size)
+        return page
 
     def list_files(self, prefix: str = "", max_results: int = 1000) -> list[StorageObject]:
         """List files in local storage."""

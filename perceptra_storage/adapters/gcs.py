@@ -19,6 +19,7 @@ except ImportError:
 from ..base import (
     BaseStorageAdapter,
     StorageObject,
+    StoragePage,
     PresignedUrl,
     StorageConnectionError,
     StorageOperationError,
@@ -179,6 +180,48 @@ class GCSStorageAdapter(BaseStorageAdapter):
                 )
                 for blob in self._client.list_blobs(self._bucket, prefix=prefix or None, max_results=max_results)
             ]
+        except Exception as e:
+            raise StorageOperationError(f"GCS list operation failed: {e}")
+
+    def download_range(self, key: str, offset: int = 0, length: int = 65536) -> bytes:
+        """Ranged read (needs only storage.objects.get)."""
+        try:
+            return self._bucket.blob(key).download_as_bytes(start=offset, end=offset + length - 1)
+        except gcs_exceptions.NotFound:
+            raise StorageNotFoundError(f"File not found in GCS: {key}")
+        except gcs_exceptions.RequestRangeNotSatisfiable:
+            return b""
+        except gcs_exceptions.Forbidden:
+            raise StoragePermissionError(f"Permission denied reading from GCS: {key}")
+        except Exception as e:
+            raise StorageOperationError(f"GCS ranged download failed: {e}")
+
+    def list_page(
+        self,
+        prefix: str = "",
+        delimiter: str = "/",
+        page_size: int = 200,
+        continuation_token: Optional[str] = None,
+    ) -> StoragePage:
+        """Folder-style listing with GCS page tokens (needs storage.objects.list)."""
+        try:
+            iterator = self._client.list_blobs(
+                self._bucket, prefix=prefix or None, delimiter=delimiter or None,
+                max_results=page_size, page_token=continuation_token,
+            )
+            gcs_page = next(iterator.pages, None)
+            page = StoragePage()
+            if gcs_page is not None:
+                page.objects = [
+                    StorageObject(key=b.name, size=b.size or 0, last_modified=b.updated, etag=b.etag,
+                                  content_type=b.content_type)
+                    for b in gcs_page
+                ]
+                page.prefixes = sorted(gcs_page.prefixes)
+            page.next_token = iterator.next_page_token
+            return page
+        except gcs_exceptions.Forbidden as e:
+            raise StoragePermissionError(f"Listing bucket '{self.config['bucket_name']}' is not permitted: {e}")
         except Exception as e:
             raise StorageOperationError(f"GCS list operation failed: {e}")
 

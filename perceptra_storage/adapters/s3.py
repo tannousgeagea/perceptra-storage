@@ -18,6 +18,7 @@ except ImportError:
 from ..base import (
     BaseStorageAdapter,
     StorageObject,
+    StoragePage,
     PresignedUrl,
     StorageConnectionError,
     StorageOperationError,
@@ -260,6 +261,52 @@ class S3StorageAdapter(BaseStorageAdapter):
             
         except ClientError as e:
             raise StorageOperationError(f"S3 list operation failed: {e}")
+
+    def download_range(self, key: str, offset: int = 0, length: int = 65536) -> bytes:
+        """Ranged GET (needs only s3:GetObject)."""
+        try:
+            response = self._client.get_object(
+                Bucket=self.config['bucket_name'], Key=key, Range=f"bytes={offset}-{offset + length - 1}",
+            )
+            return response['Body'].read()
+        except ClientError as e:
+            code = e.response.get('Error', {}).get('Code', 'Unknown')
+            if code in ('NoSuchKey', '404'):
+                raise StorageNotFoundError(f"File not found in S3: {key}")
+            if code == 'InvalidRange':
+                return b""
+            if code in ('AccessDenied', '403'):
+                raise StoragePermissionError(f"Permission denied reading from S3: {key}")
+            raise StorageOperationError(f"S3 ranged download failed: {e}")
+
+    def list_page(
+        self,
+        prefix: str = "",
+        delimiter: str = "/",
+        page_size: int = 200,
+        continuation_token: Optional[str] = None,
+    ) -> StoragePage:
+        """Folder-style listing with S3 continuation tokens (needs s3:ListBucket)."""
+        kwargs = {'Bucket': self.config['bucket_name'], 'Prefix': prefix, 'MaxKeys': page_size}
+        if delimiter:
+            kwargs['Delimiter'] = delimiter
+        if continuation_token:
+            kwargs['ContinuationToken'] = continuation_token
+        try:
+            response = self._client.list_objects_v2(**kwargs)
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') in ('AccessDenied', '403'):
+                raise StoragePermissionError(f"Listing bucket '{self.config['bucket_name']}' is not permitted: {e}")
+            raise StorageOperationError(f"S3 list operation failed: {e}")
+        return StoragePage(
+            objects=[
+                StorageObject(key=o['Key'], size=o['Size'], last_modified=o['LastModified'],
+                              etag=o.get('ETag', '').strip('"'))
+                for o in response.get('Contents', [])
+            ],
+            prefixes=[p['Prefix'] for p in response.get('CommonPrefixes', [])],
+            next_token=response.get('NextContinuationToken') if response.get('IsTruncated') else None,
+        )
 
     def generate_presigned_url(
         self,

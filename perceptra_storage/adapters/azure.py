@@ -30,6 +30,7 @@ except ImportError:
 from ..base import (
     BaseStorageAdapter,
     StorageObject,
+    StoragePage,
     PresignedUrl,
     StorageConnectionError,
     StorageOperationError,
@@ -326,6 +327,58 @@ class AzureStorageAdapter(BaseStorageAdapter):
             raise StorageNotFoundError(f"File not found in Azure: {key}")
         except Exception as e:
             raise StorageOperationError(f"Azure metadata retrieval failed: {e}")
+
+    def download_range(self, key: str, offset: int = 0, length: int = 65536) -> bytes:
+        """Ranged read (needs only read permission, e.g. a sp=r SAS)."""
+        try:
+            return self._container_client.get_blob_client(key).download_blob(offset=offset, length=length).readall()
+        except ResourceNotFoundError:
+            raise StorageNotFoundError(f"File not found in Azure: {key}")
+        except HttpResponseError as e:
+            if e.status_code == 403:
+                raise StoragePermissionError(f"Permission denied reading from Azure: {key}")
+            if e.status_code == 416:  # offset past the end
+                return b""
+            raise StorageOperationError(f"Azure ranged download failed: {e}")
+        except Exception as e:
+            raise StorageOperationError(f"Azure ranged download failed: {e}")
+
+    def list_page(
+        self,
+        prefix: str = "",
+        delimiter: str = "/",
+        page_size: int = 200,
+        continuation_token: Optional[str] = None,
+    ) -> StoragePage:
+        """Folder-style listing with Azure continuation tokens (needs list permission)."""
+        from azure.storage.blob import BlobPrefix
+
+        try:
+            pages = self._container_client.walk_blobs(
+                name_starts_with=prefix or None, delimiter=delimiter, results_per_page=page_size,
+            ).by_page(continuation_token=continuation_token)
+            page = StoragePage()
+            for item in next(pages, []):
+                if isinstance(item, BlobPrefix):
+                    page.prefixes.append(item.name)
+                else:
+                    page.objects.append(StorageObject(
+                        key=item.name,
+                        size=item.size,
+                        last_modified=item.last_modified,
+                        etag=item.etag.strip('"') if item.etag else None,
+                        content_type=item.content_settings.content_type if item.content_settings else None,
+                    ))
+            page.next_token = pages.continuation_token or None
+            return page
+        except HttpResponseError as e:
+            if e.status_code == 403:
+                raise StoragePermissionError(
+                    f"Listing '{self.config['container_name']}' is not permitted (a SAS needs list, sp=rl): {e}"
+                )
+            raise StorageOperationError(f"Azure list operation failed: {e}")
+        except Exception as e:
+            raise StorageOperationError(f"Azure list operation failed: {e}")
 
     def list_files(self, prefix: str = "", max_results: int = 1000) -> list[StorageObject]:
         """List files in Azure container."""
